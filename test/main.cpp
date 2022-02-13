@@ -24,6 +24,9 @@ main(int argc, char** argv)
   sycl::context c{ d };
   sycl::queue q{ c, d };
 
+  std::cout << "running on " << d.get_info<sycl::info::device::name>()
+            << std::endl;
+
   bool* res_d = static_cast<bool*>(sycl::malloc_device(sizeof(bool), q));
   bool* res_h = static_cast<bool*>(std::malloc(sizeof(bool)));
 
@@ -114,6 +117,8 @@ main(int argc, char** argv)
 
   // assert that SHA256 2-to-1 hash computation did what it was supposed to do
   assert(res_h[0] == true);
+
+  std::cout << "passed SHA256 2-to-1 hash test !" << std::endl;
 
   // deallocate resources
   //
