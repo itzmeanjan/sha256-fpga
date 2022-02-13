@@ -34,6 +34,17 @@ fpga_opt_test:
 fpga_hw_test:
 	$(CXX) $(CXXFLAGS) $(IFLAGS) $(OPTFLAGS) $(FPGA_HW_FLAGS) -reuse-exe=test/fpga_hw.out test/main.cpp -o test/fpga_hw.out
 
+fpga_emu_bench:
+	$(CXX) $(CXXFLAGS) $(IFLAGS) $(OPTFLAGS) $(FPGA_EMU_FLAGS) benchmark/main.cpp -o benchmark/fpga_emu.out
+
+fpga_opt_bench:
+	# output not supposed to be executed, instead consume report generated
+	# inside `benchmark/fpga_opt.prj/reports/` diretory
+	$(CXX) $(CXXFLAGS) $(IFLAGS) $(OPTFLAGS) $(FPGA_OPT_FLAGS) benchmark/main.cpp -o benchmark/fpga_opt.a
+
+fpga_hw_bench:
+	$(CXX) $(CXXFLAGS) $(IFLAGS) $(OPTFLAGS) $(FPGA_HW_FLAGS) -reuse-exe=benchmark/fpga_hw.out benchmark/main.cpp -o benchmark/fpga_hw.out
+
 clean:
 	find . -name '*.out' -o -name '*.a' -o -name '*.prj' | xargs rm -rf
 
