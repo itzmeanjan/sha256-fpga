@@ -196,8 +196,7 @@ pad_input_message(sycl::private_ptr<uint32_t> in,
 void
 hash(sycl::private_ptr<uint32_t> hash_state,
      sycl::private_ptr<uint32_t> msg_schld,
-     sycl::private_ptr<uint32_t> in,
-     sycl::private_ptr<uint32_t> out)
+     sycl::private_ptr<uint32_t> in)
 {
   // initial hash state of 256 -bit
 #pragma unroll 8 // 256 -bit burst coalesced access
