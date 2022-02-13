@@ -117,6 +117,32 @@ static inline const uint32_t
   return rotr<17>(x) ^ rotr<19>(x) ^ (x >> 10);
 }
 
+// Given 512 -bit message block ( i.e. 16 message words ), to be consumed into
+// hash state, this routine prepares 64 message schedules ( i.e. total 64
+// message words, where each word of sha256 is 32 -bit unsigned integer )
+// which will be mixed into hash state in 64 sha256 rounds
+inline void
+prepare_message_schedule(sycl::private_ptr<uint32_t> in,
+                         sycl::private_ptr<uint32_t> out)
+{
+  // first 16 message schedules are same as original message words
+  // of 512 -bit message block
+#pragma unroll 16 // 512 -bit burst coalesced loading
+  for (size_t i = 0; i < 16; i++) {
+    out[i & 0xf] = in[i & 0xf];
+  }
+
+  // 48 iteration rounds, preparing 48 remaining message schedules
+  // of total 64 message schedules for sha256
+#pragma unroll 16
+  for (size_t i = 16; i < 64; i++) {
+    const uint32_t tmp0 = σ_1(out[(i - 2) & 0x3f]) + out[(i - 7) & 0x3f];
+    const uint32_t tmp1 = σ_0(out[(i - 15) & 0x3f]) + out[(i - 16) & 0x3f];
+
+    out[i & 0x3f] = tmp0 + tmp1;
+  }
+}
+
 // 512 -bit input to sha256 2-to-1 hash function requires me to pad 16 more
 // words ( note, sha256 word size is 32 -bit ) making total of 1024 -bit padded
 // input, which will be digested into 256 -bit output, as two consecutively
