@@ -1,5 +1,6 @@
 #pragma once
 #include "sha256.hpp"
+#include "utils.hpp"
 #include <cassert>
 
 namespace merklize {
@@ -41,7 +42,11 @@ using opipe = sycl::ext::intel::pipe<class SHA256DigestWords, uint32_t, 8>;
 // placing it in proper position in output memory allocation (on global memory),
 // which will again be used in next level of intermediate node computation, if
 // not root of tree
-void
+//
+// Ensure that SYCL queue has profiling enabled, as at successful completion of
+// this routine it returns time spent in computing all intermediate nodes of
+// binary merkle tree
+sycl::cl_ulong
 merklize(sycl::queue& q,
          const size_t leaf_cnt,
          uint32_t* const __restrict leaves,
@@ -194,6 +199,10 @@ merklize(sycl::queue& q,
   });
 
   q.ext_oneapi_submit_barrier({ evt0, evt1 }).wait();
+
+  // because first enqueue command drives computation of all intermediate nodes
+  // of binary merkle tree
+  return time_event(evt0);
 }
 
 }
