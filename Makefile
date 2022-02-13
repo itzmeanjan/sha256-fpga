@@ -12,7 +12,7 @@ FPGA_EMU_FLAGS = -DFPGA_EMU -fintelfpga
 # on Intel Devcloud ( default target board in this project )
 FPGA_OPT_FLAGS = -DFPGA_HW -fintelfpga -fsycl-link=early -Xshardware -Xsboard=intel_a10gx_pac:pac_a10
 
-# Consider enabing -Xsprofile, when generating h/w image, so that execution can be profile
+# Consider enabing -Xsprofile, when generating h/w image, so that execution can be profiled
 # using Intel Vtune
 #
 # Consider reading 👆 note ( on top of `FPGA_OPT_FLAGS` definition )
