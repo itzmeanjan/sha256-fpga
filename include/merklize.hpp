@@ -54,7 +54,7 @@ merklize(sycl::queue& q,
          uint32_t* const __restrict intermediates,
          const size_t o_size)
 {
-  assert((i_size << 1) == o_size);          // ensure enough memory allocated
+  assert(i_size == o_size);                 // ensure enough memory allocated
   assert((leaf_cnt & (leaf_cnt - 1)) == 0); // ensure power of 2
 
   sycl::event evt0 = q.single_task<kernelMerklizationOrchestrator>([=]() {
