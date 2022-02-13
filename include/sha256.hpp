@@ -186,4 +186,80 @@ pad_input_message(sycl::private_ptr<uint32_t> in,
   out[31] = 0u | 0b00000010u << 8;
 }
 
+// As input takes two padded, parsed input message blocks ( = 1024 -bit, total )
+// and computes SHA2-256 digest ( = 256 -bit ) in two sequential rounds\
+//
+// Finally computed digest is placed on first 8 words of hash state
+//
+// See algorithm defined in section 6.2.2 of Secure Hash Standard
+// http://dx.doi.org/10.6028/NIST.FIPS.180-4
+void
+hash(sycl::private_ptr<uint32_t> hash_state,
+     sycl::private_ptr<uint32_t> msg_schld,
+     sycl::private_ptr<uint32_t> in,
+     sycl::private_ptr<uint32_t> out)
+{
+  // initial hash state of 256 -bit
+#pragma unroll 8 // 256 -bit burst coalesced access
+  for (size_t i = 0; i < 8; i++) {
+    hash_state[i] = IV[i];
+  }
+
+  // padded input message is 1024 -bit wide, so two message blocks ( each of 512
+  // -bit ) are to be mixed into hash state in two sequential rounds
+  //
+  // this loop will be pipelined, but mutliple iterations can't be parallelly
+  // executed, due to sequential data dependency
+  for (size_t i = 0; i < 2; i++) {
+    // step 1 of algorithm defined in section 6.2.2 of Secure Hash Standard
+    // http://dx.doi.org/10.6028/NIST.FIPS.180-4
+    prepare_message_schedule(in + (i << 4), msg_schld);
+
+    // step 2 of algorithm defined in section 6.2.2 of Secure Hash Standard
+    // http://dx.doi.org/10.6028/NIST.FIPS.180-4
+    uint32_t a = hash_state[0];
+    uint32_t b = hash_state[1];
+    uint32_t c = hash_state[2];
+    uint32_t d = hash_state[3];
+    uint32_t e = hash_state[4];
+    uint32_t f = hash_state[5];
+    uint32_t g = hash_state[6];
+    uint32_t h = hash_state[7];
+
+    // step 1 of algorithm defined in section 6.2.2 of Secure Hash Standard
+    // http://dx.doi.org/10.6028/NIST.FIPS.180-4
+    //
+    // this inner loop will be pipelined, but multiple iterations can't be
+    // parallelly executed, because 64 rounds are applied sequentially --- so
+    // data dependency is in play !
+    for (size_t t = 0; t < 64; t++) {
+      const uint32_t tmp0 = h + Σ_1(e) + ch(e, f, g) + K[t] + msg_schld[t];
+      const uint32_t tmp1 = Σ_0(a) + maj(a, b, c);
+
+      h = g;
+      g = f;
+      f = e;
+      e = d + tmp0;
+      d = c;
+      c = b;
+      b = a;
+      a = tmp0 + tmp1;
+    }
+
+    // see step 4 of algorithm defined in section  6.2.2 of Secure Hash Standard
+    // http://dx.doi.org/10.6028/NIST.FIPS.180-4
+    hash_state[0] += a;
+    hash_state[1] += b;
+    hash_state[2] += c;
+    hash_state[3] += d;
+    hash_state[4] += e;
+    hash_state[5] += f;
+    hash_state[6] += g;
+    hash_state[7] += h;
+  }
+
+  // now 2-to-1 digest of originally 512 -bit input should be placed on first 8
+  // words of hash state
+}
+
 }
