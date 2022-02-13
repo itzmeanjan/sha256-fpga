@@ -187,7 +187,7 @@ pad_input_message(sycl::private_ptr<uint32_t> in,
 }
 
 // As input takes two padded, parsed input message blocks ( = 1024 -bit, total )
-// and computes SHA2-256 digest ( = 256 -bit ) in two sequential rounds\
+// and computes SHA2-256 digest ( = 256 -bit ) in two sequential rounds
 //
 // Finally computed digest is placed on first 8 words of hash state
 //
