@@ -46,9 +46,7 @@ main(int argc, char** argv)
 
       // on-chip block RAM based allocation for preparing input message bytes
       // of length 64, where two SHA256 digests are concatenated to each other
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(1),
-        intel::numbanks(64)]] uint8_t in[64];
+      [[intel::fpga_memory("BLOCK_RAM")]] uint8_t in[64];
 
 #pragma unroll 64 // 512 -bit burst coalesced loading into on-chip block RAM
       for (size_t i = 0; i < 64; i++) {
@@ -57,9 +55,7 @@ main(int argc, char** argv)
 
       // 64 -bytes input is interpreted as 16 message words ( SHA256 word size
       // is 32 -bit )
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(4),
-        intel::numbanks(16)]] uint32_t in_words[16];
+      [[intel::fpga_memory("BLOCK_RAM")]] uint32_t in_words[16];
 
       sycl::private_ptr<uint8_t> in_ptr{ in };
 #pragma unroll 16 // 512 -bit burst coalesced loading between on-chip block RAMs
@@ -92,9 +88,7 @@ main(int argc, char** argv)
       sha256::hash(hash_state_ptr, msg_schld_ptr, padded_ptr);
 
       // finally convert 8 message word digest to 32 bytes of output
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(1),
-        intel::numbanks(32)]] uint8_t digest[32];
+      [[intel::fpga_memory("BLOCK_RAM")]] uint8_t digest[32];
       sycl::private_ptr<uint8_t> digest_ptr{ digest };
 
 #pragma unroll 8

@@ -35,7 +35,7 @@ fpga_hw_test:
 	$(CXX) $(CXXFLAGS) $(IFLAGS) $(OPTFLAGS) $(FPGA_HW_FLAGS) -reuse-exe=test/fpga_hw.out test/main.cpp -o test/fpga_hw.out
 
 clean:
-	find . -name '*.out' -o -name '*.a' -o -name '*.o' | xargs rm -rf
+	find . -name '*.out' -o -name '*.a' -o -name '*.prj' | xargs rm -rf
 
 format:
 	find . -name '*.cpp' -o -name '*.hpp' | xargs clang-format -i --style=Mozilla
