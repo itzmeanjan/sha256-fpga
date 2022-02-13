@@ -1,0 +1,5 @@
+.vscode
+*.out
+*.a
+fpga_opt.*
+fpga_hw.*
