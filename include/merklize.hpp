@@ -78,9 +78,14 @@ merklize(sycl::queue& q,
       intel::bankwidth(4),
       intel::numbanks(8)]] uint32_t digest[8];
 
-    // compute intermediate nodes which are living just above input leaf nodes
-    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i++)
+    // compute two consecutive intermediate nodes each round, which are living
+    // just above input leaf nodes
+    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 2)
     {
+      // --- begin preparing/ sending input message words for *first* parent
+      // node ( living on level just above leaf nodes ) to be computed in this
+      // iteration round ---
+
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
       for (size_t j = 0; j < 16; j++) {
         msg[j] = leaves_ptr[i_offset + j];
@@ -98,8 +103,49 @@ merklize(sycl::queue& q,
         ipipe::write(padded[j]);
       }
 
+      // --- begin preparing/ sending input message words for *second* parent
+      // node ( living on level just above leaf nodes ) to be computed in this
+      // iteration round ---
+
+#pragma unroll 16 // 512 -bit burst coalesced global memory read
+      for (size_t j = 0; j < 16; j++) {
+        msg[j] = leaves_ptr[i_offset + j];
+      }
+
+      i_offset += 16;
+
+      // padding input message such that padded message (bit) length
+      // is evenly divisible by 512 ( = sha256 message block bit length )
+      sha256::pad_input_message(msg, padded);
+
+      // send 32 padded input message words to compute kernel
+      [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
+      {
+        ipipe::write(padded[j]);
+      }
+
+      // --- begin (blocking) wait for receiving 32 -bytes digest of first
+      // parent node ---
+
       // wait for reception of sha256 digest of 512 -bit input ( imagine two
-      // sha256 digests concatenated ), in form of 8 message words
+      // sha256 digests concatenated ), in form of 8 message words ( 256 -bit )
+      [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
+      {
+        digest[j] = opipe::read();
+      }
+
+#pragma unroll 8 // 256 -bit burst coalesced global memory write
+      for (size_t j = 0; j < 8; j++) {
+        intermediates_ptr[o_offset + j] = digest[j];
+      }
+
+      o_offset += 8;
+
+      // --- begin (blocking) wait for receiving 32 -bytes digest of second
+      // parent node ---
+
+      // wait for reception of sha256 digest of 512 -bit input ( imagine two
+      // sha256 digests concatenated ), in form of 8 message words ( 256 -bit )
       [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
       {
         digest[j] = opipe::read();
@@ -115,7 +161,7 @@ merklize(sycl::queue& q,
 
     // these many levels of intermediate nodes ( including root of tree )
     // remaining to be computed
-    [[intel::fpga_register]] const size_t rounds = bin_log(leaf_cnt >> 1);
+    [[intel::fpga_register]] const size_t rounds = bin_log(leaf_cnt >> 1) - 1ul;
 
     // each level of tree ( bottom up ) depends on completion of computation of
     // previous round --- data dependency !
@@ -127,8 +173,15 @@ merklize(sycl::queue& q,
       // these many intermediate nodes to be computed in this level of tree,
       // where each node computation is independent of any other node living on
       // same level of tree
-      [[intel::ivdep]] for (size_t i = 0; i < rnd_itr_cnt; i++)
+      //
+      // note, during each iteration, two consecutive parent nodes are computed
+      // ( thus 👇 increment )
+      [[intel::ivdep]] for (size_t i = 0; i < rnd_itr_cnt; i += 2)
       {
+        // --- begin preparing ( padded ) input message words ( 1024 -bit ) for
+        // sending to hasher kernel, where first parent ( intermediate ) node
+        // will be computed ---
+
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
         for (size_t j = 0; j < 16; j++) {
           msg[j] = intermediates_ptr[rd_offset + j];
@@ -146,11 +199,52 @@ merklize(sycl::queue& q,
           ipipe::write(padded[j]);
         }
 
+        // --- begin preparing ( padded ) input message words ( 1024 -bit ) for
+        // sending to hasher kernel, where second parent ( intermediate ) node
+        // will be computed ---
+
+#pragma unroll 16 // 512 -bit burst coalesced global memory read
+        for (size_t j = 0; j < 16; j++) {
+          msg[j] = intermediates_ptr[rd_offset + j];
+        }
+
+        rd_offset += 16;
+
+        // padding input message ( = 64 -bytes, imagine two sha256 digests
+        // concatenated ), such that padded input ( bit ) length is evenly
+        // divisible by 512 ( = sha256 message block bit length )
+        sha256::pad_input_message(msg, padded);
+
+        [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
+        {
+          ipipe::write(padded[j]);
+        }
+
+        // --- begin ( blocking ) wait for receiving 32 -bytes digest for first
+        // parent ( intermediate ) node computed ---
+
         [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
         {
           digest[j] = opipe::read();
         }
 
+        // now write first digest to global memory
+#pragma unroll 8 // 256 -bit burst coalesced global memory write
+        for (size_t j = 0; j < 8; j++) {
+          intermediates_ptr[wr_offset + j] = digest[j];
+        }
+
+        wr_offset += 8;
+
+        // --- begin ( blocking ) wait for receiving 32 -bytes digest for second
+        // parent ( intermediate ) node computed ---
+
+        [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
+        {
+          digest[j] = opipe::read();
+        }
+
+        // now write second digest to global memory
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
         for (size_t j = 0; j < 8; j++) {
           intermediates_ptr[wr_offset + j] = digest[j];
@@ -159,6 +253,39 @@ merklize(sycl::queue& q,
         wr_offset += 8;
       }
     }
+
+    // --- begin computing root of Binary Merkle Tree ---
+
+    [[intel::fpga_register]] constexpr size_t rd_offset = 16ul;
+    [[intel::fpga_register]] constexpr size_t wr_offset = rd_offset >> 1;
+
+#pragma unroll 16 // 512 -bit burst coalesced global memory read
+    for (size_t j = 0; j < 16; j++) {
+      msg[j] = intermediates_ptr[rd_offset + j];
+    }
+
+    // padding input message ( = 64 -bytes, imagine two sha256 digests
+    // concatenated ), such that padded input ( bit ) length is evenly
+    // divisible by 512 ( = sha256 message block bit length )
+    sha256::pad_input_message(msg, padded);
+
+    [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
+    {
+      ipipe::write(padded[j]);
+    }
+
+    [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
+    {
+      digest[j] = opipe::read();
+    }
+
+    // now write second digest to global memory
+#pragma unroll 8 // 256 -bit burst coalesced global memory write
+    for (size_t j = 0; j < 8; j++) {
+      intermediates_ptr[wr_offset + j] = digest[j];
+    }
+
+    // --- end computing root of Binary Merkle Tree ---
   });
 
   sycl::event evt1 = q.single_task<kernelSHA256Merklization>([=]() {
