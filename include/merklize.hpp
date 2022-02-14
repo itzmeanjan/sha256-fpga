@@ -26,12 +26,15 @@ bin_log(size_t n)
   return cnt;
 }
 
-// 1024 -bit (padded) input message ( = 32 words ) passed to kernel computing
-// SHA256 2-to-1 digest, over this pipe
-using ipipe = sycl::ext::intel::pipe<class SHA256MessageWords, uint32_t>;
+// Producer kernel(s) passing 1024 -bit (padded) input message ( = 32 words ) to
+// compute kernel(s) over these pipe
+using ipipe_l0 = sycl::ext::intel::pipe<class SHA256MessageWordsL0, uint32_t>;
+using ipipe_l1 = sycl::ext::intel::pipe<class SHA256MessageWordsL1, uint32_t>;
+
 // After computing SHA256 digest on 1024 -bit input message, 8 message words are
-// passed back to orchestrator kernel, over this pipe
-using opipe = sycl::ext::intel::pipe<class SHA256DigestWords, uint32_t>;
+// passed to consumer kernel(s), over these pipe
+using opipe_l0 = sycl::ext::intel::pipe<class SHA256DigestWordsL0, uint32_t>;
+using opipe_l1 = sycl::ext::intel::pipe<class SHA256DigestWordsL1, uint32_t>;
 
 // Computes all intermediate nodes of Binary Merkle Tree using SHA256 2-to-1
 // hash function, where leaf node count is power of 2 value
@@ -69,6 +72,7 @@ merklize(sycl::queue& q,
     // leaf nodes, where N is power of 2, `rounds` -many sha256 intermediate
     // nodes to be computed, using sha256 2-to-1 hash function
     [[intel::fpga_register]] const size_t rounds = leaf_cnt - 1ul;
+    [[intel::fpga_register]] const size_t pipe_switch_at = leaf_cnt >> 1;
 
     [[intel::fpga_memory("BLOCK_RAM"),
       intel::bankwidth(4),
@@ -85,7 +89,11 @@ merklize(sycl::queue& q,
       // get padded 1024 -bit input message over SYCL pipe
       [[intel::ivdep]] for (size_t i = 0; i < 32; i++)
       {
-        padded[i] = ipipe::read();
+        if (r < pipe_switch_at) {
+          padded[i] = ipipe_l0::read();
+        } else {
+          padded[i] = ipipe_l1::read();
+        }
       }
 
       // compute sha256 on that input, keep output
@@ -96,7 +104,11 @@ merklize(sycl::queue& q,
       // input over SYCL pipe, back to orchestractor kernel
       [[intel::ivdep]] for (size_t i = 0; i < 8; i++)
       {
-        opipe::write(hash_state[i]);
+        if (r < pipe_switch_at) {
+          opipe_l0::write(hash_state[i]);
+        } else {
+          opipe_l1::write(hash_state[i]);
+        }
       }
     }
   });
@@ -128,7 +140,7 @@ merklize(sycl::queue& q,
       // send 32 padded input message words to compute kernel
       [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
       {
-        ipipe::write(padded[j]);
+        ipipe_l0::write(padded[j]);
       }
     }
   });
@@ -148,7 +160,7 @@ merklize(sycl::queue& q,
       // sha256 digests concatenated ), in form of 8 message words ( 256 -bit )
       [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
       {
-        digest[j] = opipe::read();
+        digest[j] = opipe_l0::read();
       }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
@@ -206,7 +218,7 @@ merklize(sycl::queue& q,
           // send 32 padded input message words to compute kernel
           [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
           {
-            ipipe::write(padded[j]);
+            ipipe_l1::write(padded[j]);
           }
         }
       });
@@ -234,7 +246,7 @@ merklize(sycl::queue& q,
           // )
           [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
           {
-            digest[j] = opipe::read();
+            digest[j] = opipe_l1::read();
           }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
