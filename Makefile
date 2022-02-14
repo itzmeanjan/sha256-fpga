@@ -16,7 +16,7 @@ FPGA_OPT_FLAGS = -DFPGA_HW -fintelfpga -fsycl-link=early -Xshardware -Xsboard=in
 # using Intel Vtune
 #
 # Consider reading 👆 note ( on top of `FPGA_OPT_FLAGS` definition )
-FPGA_HW_FLAGS = -DFPGA_HW -fintelfpga -Xshardware -Xsboard=intel_a10gx_pac:pac_a10
+FPGA_HW_FLAGS = -DFPGA_HW -fintelfpga -Xshardware -Xsparallel=2 -Xsboard=intel_a10gx_pac:pac_a10
 
 all: fpga_emu_test
 
