@@ -5,39 +5,20 @@
 
 namespace merklize {
 
-// Kernels predeclared to avoid name mangling in optimization report
-class kernelSHA256Hash0;
-class kernelSHA256Hash1;
-class kernelSHA256Hash2;
-class kernelSHA256Hash3;
-class kernelMerklizationOrchestrator0;
-class kernelMerklizationOrchestrator1;
-class kernelMerklizationOrchestrator2;
+#define SHA256KernelDecl(idx) class kernelSHA256Hash##idx
+#define MerklizeKernelDecl(idx) class kernelMerklizationOrchestrator##idx
 
-// Pipes predeclared to avoid name mangling in optimization report
-//
-class SHA256MessageWords0; // -> kernel 0
-class SHA256DigestWords0;  // <- kernel 0
-class SHA256MessageWords1; // -> kernel 1
-class SHA256DigestWords1;  // <- kernel 1
-class SHA256MessageWords2; // -> kernel 2
-class SHA256DigestWords2;  // <- kernel 2
-class SHA256MessageWords3; // -> kernel 3
-class SHA256DigestWords3;  // <- kernel 3
+#define IPipeDecl(idx) class SHA256MessageWords##idx
+#define OPipeDecl(idx) class SHA256DigestWords##idx
 
-// Orchestrator kernel(s) passing 1024 -bit (padded) input message ( = 32 words
-// ) to compute kernel(s) over these pipe
-using ipipe0 = sycl::ext::intel::pipe<SHA256MessageWords0, uint32_t, 0>;
-using ipipe1 = sycl::ext::intel::pipe<SHA256MessageWords1, uint32_t, 0>;
-using ipipe2 = sycl::ext::intel::pipe<SHA256MessageWords2, uint32_t, 0>;
-using ipipe3 = sycl::ext::intel::pipe<SHA256MessageWords3, uint32_t, 0>;
+// Compile-time template for sending padded input message words to SHA256 kernel
+#define IPipe(idx)                                                             \
+  using ipipe##idx =                                                           \
+    sycl::ext::intel::pipe<SHA256MessageWords##idx, uint32_t, 0>
 
-// After computing SHA256 digest on 1024 -bit input message, 8 message words ( =
-// 32 -bytes ) are passed back to orchestrator kernel(s), over these pipes
-using opipe0 = sycl::ext::intel::pipe<SHA256DigestWords0, uint32_t, 0>;
-using opipe1 = sycl::ext::intel::pipe<SHA256DigestWords1, uint32_t, 0>;
-using opipe2 = sycl::ext::intel::pipe<SHA256DigestWords2, uint32_t, 0>;
-using opipe3 = sycl::ext::intel::pipe<SHA256DigestWords3, uint32_t, 0>;
+// Compile-time template for sending output digest words from SHA256 kernel
+#define OPipe(idx)                                                             \
+  using opipe##idx = sycl::ext::intel::pipe<SHA256DigestWords##idx, uint32_t, 0>
 
 // Generic ( in terms of which pipes are for communication, kernel identifier )
 // SHA256 hash calculator kernel
@@ -66,6 +47,62 @@ using opipe3 = sycl::ext::intel::pipe<SHA256DigestWords3, uint32_t, 0>;
       }                                                                        \
     }                                                                          \
   })
+
+// Kernels predeclared to avoid name mangling in optimization report
+//
+SHA256KernelDecl(0);
+SHA256KernelDecl(1);
+SHA256KernelDecl(2);
+SHA256KernelDecl(3);
+SHA256KernelDecl(4);
+SHA256KernelDecl(5);
+SHA256KernelDecl(6);
+SHA256KernelDecl(7);
+
+MerklizeKernelDecl(0);
+MerklizeKernelDecl(1);
+MerklizeKernelDecl(2);
+
+// Pipes predeclared to avoid name mangling in optimization report
+//
+IPipeDecl(0);
+OPipeDecl(0);
+IPipeDecl(1);
+OPipeDecl(1);
+IPipeDecl(2);
+OPipeDecl(2);
+IPipeDecl(3);
+OPipeDecl(3);
+IPipeDecl(4);
+OPipeDecl(4);
+IPipeDecl(5);
+OPipeDecl(5);
+IPipeDecl(6);
+OPipeDecl(6);
+IPipeDecl(7);
+OPipeDecl(7);
+
+// Orchestrator kernel(s) passing 1024 -bit (padded) input message ( = 32 words
+// ) to compute kernel(s) over these pipe
+IPipe(0);
+IPipe(1);
+IPipe(2);
+IPipe(3);
+IPipe(4);
+IPipe(5);
+IPipe(6);
+IPipe(7);
+
+// After computing SHA256 digest on 1024 -bit input message, 8 message words ( =
+// 32 -bytes ) are passed back to orchestrator kernel(s), over these pipes
+OPipe(0);
+OPipe(1);
+OPipe(2);
+OPipe(3);
+OPipe(4);
+OPipe(5);
+OPipe(6);
+OPipe(7);
 
 // Computes binary logarithm of number `n`,
 // where n = 2 ^ i | i = {1, 2, 3 ...}
