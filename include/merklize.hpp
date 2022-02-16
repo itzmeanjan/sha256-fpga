@@ -39,6 +39,34 @@ using opipe1 = sycl::ext::intel::pipe<SHA256DigestWords1, uint32_t, 0>;
 using opipe2 = sycl::ext::intel::pipe<SHA256DigestWords2, uint32_t, 0>;
 using opipe3 = sycl::ext::intel::pipe<SHA256DigestWords3, uint32_t, 0>;
 
+// Generic ( in terms of which pipes are for communication, kernel identifier )
+// SHA256 hash calculator kernel
+#define ComputeSHA256(idx)                                                     \
+  q.single_task<kernelSHA256Hash##idx>([=]() [[intel::kernel_args_restrict]] { \
+    [[intel::fpga_memory("BLOCK_RAM"),                                         \
+      intel::bankwidth(4),                                                     \
+      intel::numbanks(32)]] uint32_t padded[32];                               \
+    [[intel::fpga_memory("BLOCK_RAM"),                                         \
+      intel::bankwidth(4),                                                     \
+      intel::numbanks(8)]] uint32_t hash_state[8];                             \
+    [[intel::fpga_memory("BLOCK_RAM"),                                         \
+      intel::bankwidth(4),                                                     \
+      intel::numbanks(16)]] uint32_t msg_schld[64];                            \
+    while (true) {                                                             \
+      [[intel::ivdep]] for (size_t i = 0; i < 32; i++)                         \
+      {                                                                        \
+        padded[i] = ipipe##idx::read();                                        \
+      }                                                                        \
+                                                                               \
+      sha256::hash(hash_state, msg_schld, padded);                             \
+                                                                               \
+      [[intel::ivdep]] for (size_t i = 0; i < 8; i++)                          \
+      {                                                                        \
+        opipe##idx::write(hash_state[i]);                                      \
+      }                                                                        \
+    }                                                                          \
+  })
+
 // Computes binary logarithm of number `n`,
 // where n = 2 ^ i | i = {1, 2, 3 ...}
 const size_t
@@ -54,22 +82,23 @@ bin_log(size_t n)
   return cnt;
 }
 
-// Computes all intermediate nodes of Binary Merkle Tree using SHA256 2-to-1
-// hash function, where leaf node count is power of 2 value
+// Computes all intermediate nodes of Binary Merkle Tree using SHA256
+// 2-to-1 hash function, where leaf node count is power of 2 value
 //
 // In this routine, kernel pairs ( orchestrator <-> sha256hash ) will be
-// communicating over SYCL pipes, where orchestrator kernel which is responsible
-// for driving multiple phases ( dependent on previously completed one ) of
-// computation of intermediates of binary merkle tree, sends padded input
-// message words ( = 32 ) over blocking SYCL pipe and waits for completion of
-// SHA256 computation on compute kernel, which finally sends back 32 -bytes
-// digest to orchestrator for placing it in proper position in output memory
-// allocation (on global memory), which will again be used in next level of
-// intermediate node computation, if not in root level of tree
+// communicating over SYCL pipes, where orchestrator kernel which is
+// responsible for driving multiple phases ( dependent on previously
+// completed one ) of computation of intermediates of binary merkle tree,
+// sends padded input message words ( = 32 ) over blocking SYCL pipe and
+// waits for completion of SHA256 computation on compute kernel, which
+// finally sends back 32 -bytes digest to orchestrator for placing it in
+// proper position in output memory allocation (on global memory), which
+// will again be used in next level of intermediate node computation, if
+// not in root level of tree
 //
-// Ensure that SYCL queue has profiling enabled, as at successful completion of
-// this routine it returns time spent in computing all intermediate nodes of
-// binary merkle tree
+// Ensure that SYCL queue has profiling enabled, as at successful
+// completion of this routine it returns time spent in computing all
+// intermediate nodes of binary merkle tree
 sycl::cl_ulong
 merklize(sycl::queue& q,
          const size_t leaf_cnt,
@@ -162,9 +191,9 @@ merklize(sycl::queue& q,
       }
     }
 
-    // these many levels of intermediate nodes ( excluding root of tree )
-    // remaining to be computed, where (i+1)-th level is dependent on i-th
-    // level, while indexing is done bottom up
+    // these many levels of intermediate nodes ( excluding root of tree
+    // ) remaining to be computed, where (i+1)-th level is dependent on
+    // i-th level, while indexing is done bottom up
     const size_t rounds = bin_log(leaf_cnt >> 2);
 
     for (size_t r = 0; r < rounds; r++) {
@@ -319,9 +348,9 @@ merklize(sycl::queue& q,
       }
     }
 
-    // these many levels of intermediate nodes ( excluding root of tree )
-    // remaining to be computed, where (i+1)-th level is dependent on i-th
-    // level, while indexing is done bottom up
+    // these many levels of intermediate nodes ( excluding root of tree
+    // ) remaining to be computed, where (i+1)-th level is dependent on
+    // i-th level, while indexing is done bottom up
     const size_t rounds = bin_log(leaf_cnt >> 2);
 
     for (size_t r = 0; r < rounds; r++) {
@@ -433,133 +462,13 @@ merklize(sycl::queue& q,
     });
   });
 
-  sycl::event evt3 = q.single_task<kernelSHA256Hash0>([=]() {
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t hash_state[8];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg_schld[64];
-
-    while (true) {
-      // get padded 1024 -bit input message over SYCL pipe
-      [[intel::ivdep]] for (size_t i = 0; i < 32; i++)
-      {
-        padded[i] = ipipe0::read();
-      }
-
-      // compute sha256 on that input, keep output
-      // in hash state ( 8 message words )
-      sha256::hash(hash_state, msg_schld, padded);
-
-      // finally send 8 message words ( = 256 -bit )
-      // input over SYCL pipe, back to orchestractor kernel
-      [[intel::ivdep]] for (size_t i = 0; i < 8; i++)
-      {
-        opipe0::write(hash_state[i]);
-      }
-    }
-  });
-
-  sycl::event evt4 = q.single_task<kernelSHA256Hash1>([=]() {
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t hash_state[8];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg_schld[64];
-
-    while (true) {
-      // get padded 1024 -bit input message over SYCL pipe
-      [[intel::ivdep]] for (size_t i = 0; i < 32; i++)
-      {
-        padded[i] = ipipe1::read();
-      }
-
-      // compute sha256 on that input, keep output
-      // in hash state ( 8 message words )
-      sha256::hash(hash_state, msg_schld, padded);
-
-      // finally send 8 message words ( = 256 -bit )
-      // input over SYCL pipe, back to orchestractor kernel
-      [[intel::ivdep]] for (size_t i = 0; i < 8; i++)
-      {
-        opipe1::write(hash_state[i]);
-      }
-    }
-  });
-
-  sycl::event evt5 = q.single_task<kernelSHA256Hash2>([=]() {
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t hash_state[8];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg_schld[64];
-
-    while (true) {
-      // get padded 1024 -bit input message over SYCL pipe
-      [[intel::ivdep]] for (size_t i = 0; i < 32; i++)
-      {
-        padded[i] = ipipe2::read();
-      }
-
-      // compute sha256 on that input, keep output
-      // in hash state ( 8 message words )
-      sha256::hash(hash_state, msg_schld, padded);
-
-      // finally send 8 message words ( = 256 -bit )
-      // input over SYCL pipe, back to orchestractor kernel
-      [[intel::ivdep]] for (size_t i = 0; i < 8; i++)
-      {
-        opipe2::write(hash_state[i]);
-      }
-    }
-  });
-
-  sycl::event evt6 = q.single_task<kernelSHA256Hash3>([=]() {
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t hash_state[8];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg_schld[64];
-
-    while (true) {
-      // get padded 1024 -bit input message over SYCL pipe
-      [[intel::ivdep]] for (size_t i = 0; i < 32; i++)
-      {
-        padded[i] = ipipe3::read();
-      }
-
-      // compute sha256 on that input, keep output
-      // in hash state ( 8 message words )
-      sha256::hash(hash_state, msg_schld, padded);
-
-      // finally send 8 message words ( = 256 -bit )
-      // input over SYCL pipe, back to orchestractor kernel
-      [[intel::ivdep]] for (size_t i = 0; i < 8; i++)
-      {
-        opipe3::write(hash_state[i]);
-      }
-    }
-  });
+  sycl::event evt3 = ComputeSHA256(0);
+  sycl::event evt4 = ComputeSHA256(1);
+  sycl::event evt5 = ComputeSHA256(2);
+  sycl::event evt6 = ComputeSHA256(3);
 
   evt2.wait();
 
   return ((time_event(evt0) + time_event(evt1)) >> 1) + time_event(evt2);
 }
-
 }
