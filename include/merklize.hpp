@@ -24,15 +24,9 @@ namespace merklize {
 // SHA256 hash calculator kernel
 #define ComputeSHA256(idx)                                                     \
   q.single_task<kernelSHA256Hash##idx>([=]() [[intel::kernel_args_restrict]] { \
-    [[intel::fpga_memory("BLOCK_RAM"),                                         \
-      intel::bankwidth(4),                                                     \
-      intel::numbanks(32)]] uint32_t padded[32];                               \
-    [[intel::fpga_memory("BLOCK_RAM"),                                         \
-      intel::bankwidth(4),                                                     \
-      intel::numbanks(8)]] uint32_t hash_state[8];                             \
-    [[intel::fpga_memory("BLOCK_RAM"),                                         \
-      intel::bankwidth(4),                                                     \
-      intel::numbanks(16)]] uint32_t msg_schld[64];                            \
+    [[intel::fpga_register]] uint32_t padded[32];                              \
+    [[intel::fpga_register]] uint32_t hash_state[8];                           \
+    [[intel::fpga_register]] uint32_t msg_schld[64];                           \
     while (true) {                                                             \
       [[intel::ivdep]] for (size_t i = 0; i < 32; i++)                         \
       {                                                                        \
@@ -54,10 +48,6 @@ SHA256KernelDecl(0);
 SHA256KernelDecl(1);
 SHA256KernelDecl(2);
 SHA256KernelDecl(3);
-SHA256KernelDecl(4);
-SHA256KernelDecl(5);
-SHA256KernelDecl(6);
-SHA256KernelDecl(7);
 
 MerklizeKernelDecl(0);
 MerklizeKernelDecl(1);
@@ -73,14 +63,6 @@ IPipeDecl(2);
 OPipeDecl(2);
 IPipeDecl(3);
 OPipeDecl(3);
-IPipeDecl(4);
-OPipeDecl(4);
-IPipeDecl(5);
-OPipeDecl(5);
-IPipeDecl(6);
-OPipeDecl(6);
-IPipeDecl(7);
-OPipeDecl(7);
 
 // Orchestrator kernel(s) passing 1024 -bit (padded) input message ( = 32 words
 // ) to compute kernel(s) over these pipe
@@ -88,10 +70,6 @@ IPipe(0);
 IPipe(1);
 IPipe(2);
 IPipe(3);
-IPipe(4);
-IPipe(5);
-IPipe(6);
-IPipe(7);
 
 // After computing SHA256 digest on 1024 -bit input message, 8 message words ( =
 // 32 -bytes ) are passed back to orchestrator kernel(s), over these pipes
@@ -99,10 +77,6 @@ OPipe(0);
 OPipe(1);
 OPipe(2);
 OPipe(3);
-OPipe(4);
-OPipe(5);
-OPipe(6);
-OPipe(7);
 
 // Computes binary logarithm of number `n`,
 // where n = 2 ^ i | i = {1, 2, 3 ...}
@@ -154,30 +128,20 @@ merklize(sycl::queue& q,
     // on-chip (kernel) private memory allocation with attributes
     // such that enough read/ write ports are available for facilitating
     // parallel (stall-free, preferrably) access
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg[16];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t digest[8];
+    [[intel::fpga_register]] uint32_t msg[16];
+    [[intel::fpga_register]] uint32_t padded[32];
+    [[intel::fpga_register]] uint32_t digest[8];
 
     const size_t i_offset = 0;
     const size_t o_offset = (leaf_cnt >> 1) << 3;
     const size_t itr_cnt = leaf_cnt >> 2;
 
-    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 4)
+    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 2)
     {
       const size_t i_offset_0 = i_offset + (i << 4);
       const size_t i_offset_1 = i_offset + ((i + 1) << 4);
-      const size_t i_offset_2 = i_offset + ((i + 2) << 4);
-      const size_t i_offset_3 = i_offset + ((i + 3) << 4);
       const size_t o_offset_0 = o_offset + (i << 3);
       const size_t o_offset_1 = o_offset + ((i + 1) << 3);
-      const size_t o_offset_2 = o_offset + ((i + 2) << 3);
-      const size_t o_offset_3 = o_offset + ((i + 3) << 3);
 
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
       for (size_t j = 0; j < 16; j++) {
@@ -211,40 +175,6 @@ merklize(sycl::queue& q,
 
       // ---
 
-      if (itr_cnt > 2) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-        for (size_t j = 0; j < 16; j++) {
-          msg[j] = leaves_ptr[i_offset_2 + j];
-        }
-
-        sha256::pad_input_message(msg, padded);
-
-        // send 32 padded input message words to compute kernel
-        [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-        {
-          ipipe2::write(padded[j]);
-        }
-      }
-
-      // ---
-
-      if (itr_cnt > 3) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-        for (size_t j = 0; j < 16; j++) {
-          msg[j] = leaves_ptr[i_offset_3 + j];
-        }
-
-        sha256::pad_input_message(msg, padded);
-
-        // send 32 padded input message words to compute kernel
-        [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-        {
-          ipipe3::write(padded[j]);
-        }
-      }
-
-      // ---
-
       [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
       {
         digest[j] = opipe0::read();
@@ -268,34 +198,6 @@ merklize(sycl::queue& q,
           intermediates_ptr[o_offset_1 + j] = digest[j];
         }
       }
-
-      // ---
-
-      if (itr_cnt > 2) {
-        [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-        {
-          digest[j] = opipe2::read();
-        }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-        for (size_t j = 0; j < 8; j++) {
-          intermediates_ptr[o_offset_2 + j] = digest[j];
-        }
-      }
-
-      // ---
-
-      if (itr_cnt > 3) {
-        [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-        {
-          digest[j] = opipe3::read();
-        }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-        for (size_t j = 0; j < 8; j++) {
-          intermediates_ptr[o_offset_3 + j] = digest[j];
-        }
-      }
     }
 
     // these many levels of intermediate nodes ( excluding root of tree
@@ -308,16 +210,12 @@ merklize(sycl::queue& q,
       const size_t o_offset = i_offset >> 1;
       const size_t itr_cnt = leaf_cnt >> (r + 3);
 
-      [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 4)
+      [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 2)
       {
         const size_t i_offset_0 = i_offset + (i << 4);
         const size_t i_offset_1 = i_offset + ((i + 1) << 4);
-        const size_t i_offset_2 = i_offset + ((i + 2) << 4);
-        const size_t i_offset_3 = i_offset + ((i + 3) << 4);
         const size_t o_offset_0 = o_offset + (i << 3);
         const size_t o_offset_1 = o_offset + ((i + 1) << 3);
-        const size_t o_offset_2 = o_offset + ((i + 2) << 3);
-        const size_t o_offset_3 = o_offset + ((i + 3) << 3);
 
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
         for (size_t j = 0; j < 16; j++) {
@@ -349,36 +247,6 @@ merklize(sycl::queue& q,
           }
         }
 
-        if (itr_cnt > 2) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-          for (size_t j = 0; j < 16; j++) {
-            msg[j] = intermediates_ptr[i_offset_2 + j];
-          }
-
-          sha256::pad_input_message(msg, padded);
-
-          // send 32 padded input message words to compute kernel
-          [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-          {
-            ipipe2::write(padded[j]);
-          }
-        }
-
-        if (itr_cnt > 3) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-          for (size_t j = 0; j < 16; j++) {
-            msg[j] = intermediates_ptr[i_offset_3 + j];
-          }
-
-          sha256::pad_input_message(msg, padded);
-
-          // send 32 padded input message words to compute kernel
-          [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-          {
-            ipipe3::write(padded[j]);
-          }
-        }
-
         // ---
 
         [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
@@ -404,30 +272,6 @@ merklize(sycl::queue& q,
             intermediates_ptr[o_offset_1 + j] = digest[j];
           }
         }
-
-        if (itr_cnt > 2) {
-          [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-          {
-            digest[j] = opipe2::read();
-          }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-          for (size_t j = 0; j < 8; j++) {
-            intermediates_ptr[o_offset_2 + j] = digest[j];
-          }
-        }
-
-        if (itr_cnt > 3) {
-          [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-          {
-            digest[j] = opipe3::read();
-          }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-          for (size_t j = 0; j < 8; j++) {
-            intermediates_ptr[o_offset_3 + j] = digest[j];
-          }
-        }
       }
     }
   });
@@ -439,30 +283,20 @@ merklize(sycl::queue& q,
     // on-chip (kernel) private memory allocation with attributes
     // such that enough read/ write ports are available for facilitating
     // parallel (stall-free, preferrably) access
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(16)]] uint32_t msg[16];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(32)]] uint32_t padded[32];
-    [[intel::fpga_memory("BLOCK_RAM"),
-      intel::bankwidth(4),
-      intel::numbanks(8)]] uint32_t digest[8];
+    [[intel::fpga_register]] uint32_t msg[16];
+    [[intel::fpga_register]] uint32_t padded[32];
+    [[intel::fpga_register]] uint32_t digest[8];
 
     const size_t i_offset = (leaf_cnt >> 1) << 3;
     const size_t o_offset = i_offset + (i_offset >> 1);
     const size_t itr_cnt = leaf_cnt >> 2;
 
-    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 4)
+    [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 2)
     {
       const size_t i_offset_0 = i_offset + (i << 4);
       const size_t i_offset_1 = i_offset + ((i + 1) << 4);
-      const size_t i_offset_2 = i_offset + ((i + 2) << 4);
-      const size_t i_offset_3 = i_offset + ((i + 3) << 4);
       const size_t o_offset_0 = o_offset + (i << 3);
       const size_t o_offset_1 = o_offset + ((i + 1) << 3);
-      const size_t o_offset_2 = o_offset + ((i + 2) << 3);
-      const size_t o_offset_3 = o_offset + ((i + 3) << 3);
 
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
       for (size_t j = 0; j < 16; j++) {
@@ -474,7 +308,7 @@ merklize(sycl::queue& q,
       // send 32 padded input message words to compute kernel
       [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
       {
-        ipipe4::write(padded[j]);
+        ipipe2::write(padded[j]);
       }
 
       // ---
@@ -490,37 +324,7 @@ merklize(sycl::queue& q,
         // send 32 padded input message words to compute kernel
         [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
         {
-          ipipe5::write(padded[j]);
-        }
-      }
-
-      if (itr_cnt > 2) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-        for (size_t j = 0; j < 16; j++) {
-          msg[j] = leaves_ptr[i_offset_2 + j];
-        }
-
-        sha256::pad_input_message(msg, padded);
-
-        // send 32 padded input message words to compute kernel
-        [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-        {
-          ipipe6::write(padded[j]);
-        }
-      }
-
-      if (itr_cnt > 3) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-        for (size_t j = 0; j < 16; j++) {
-          msg[j] = leaves_ptr[i_offset_3 + j];
-        }
-
-        sha256::pad_input_message(msg, padded);
-
-        // send 32 padded input message words to compute kernel
-        [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-        {
-          ipipe7::write(padded[j]);
+          ipipe3::write(padded[j]);
         }
       }
 
@@ -528,7 +332,7 @@ merklize(sycl::queue& q,
 
       [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
       {
-        digest[j] = opipe4::read();
+        digest[j] = opipe2::read();
       }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
@@ -541,36 +345,12 @@ merklize(sycl::queue& q,
       if (itr_cnt > 1) {
         [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
         {
-          digest[j] = opipe5::read();
+          digest[j] = opipe3::read();
         }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
         for (size_t j = 0; j < 8; j++) {
           intermediates_ptr[o_offset_1 + j] = digest[j];
-        }
-      }
-
-      if (itr_cnt > 2) {
-        [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-        {
-          digest[j] = opipe6::read();
-        }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-        for (size_t j = 0; j < 8; j++) {
-          intermediates_ptr[o_offset_2 + j] = digest[j];
-        }
-      }
-
-      if (itr_cnt > 3) {
-        [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-        {
-          digest[j] = opipe7::read();
-        }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-        for (size_t j = 0; j < 8; j++) {
-          intermediates_ptr[o_offset_3 + j] = digest[j];
         }
       }
     }
@@ -585,16 +365,12 @@ merklize(sycl::queue& q,
       const size_t o_offset = i_offset >> 1;
       const size_t itr_cnt = leaf_cnt >> (r + 3);
 
-      [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 4)
+      [[intel::ivdep]] for (size_t i = 0; i < itr_cnt; i += 2)
       {
         const size_t i_offset_0 = i_offset + (i << 4);
         const size_t i_offset_1 = i_offset + ((i + 1) << 4);
-        const size_t i_offset_2 = i_offset + ((i + 2) << 4);
-        const size_t i_offset_3 = i_offset + ((i + 3) << 4);
         const size_t o_offset_0 = o_offset + (i << 3);
         const size_t o_offset_1 = o_offset + ((i + 1) << 3);
-        const size_t o_offset_2 = o_offset + ((i + 2) << 3);
-        const size_t o_offset_3 = o_offset + ((i + 3) << 3);
 
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
         for (size_t j = 0; j < 16; j++) {
@@ -606,7 +382,7 @@ merklize(sycl::queue& q,
         // send 32 padded input message words to compute kernel
         [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
         {
-          ipipe4::write(padded[j]);
+          ipipe2::write(padded[j]);
         }
 
         // ---
@@ -622,37 +398,7 @@ merklize(sycl::queue& q,
           // send 32 padded input message words to compute kernel
           [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
           {
-            ipipe5::write(padded[j]);
-          }
-        }
-
-        if (itr_cnt > 2) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-          for (size_t j = 0; j < 16; j++) {
-            msg[j] = intermediates_ptr[i_offset_2 + j];
-          }
-
-          sha256::pad_input_message(msg, padded);
-
-          // send 32 padded input message words to compute kernel
-          [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-          {
-            ipipe6::write(padded[j]);
-          }
-        }
-
-        if (itr_cnt > 3) {
-#pragma unroll 16 // 512 -bit burst coalesced global memory read
-          for (size_t j = 0; j < 16; j++) {
-            msg[j] = intermediates_ptr[i_offset_3 + j];
-          }
-
-          sha256::pad_input_message(msg, padded);
-
-          // send 32 padded input message words to compute kernel
-          [[intel::ivdep]] for (size_t j = 0; j < 32; j++)
-          {
-            ipipe7::write(padded[j]);
+            ipipe3::write(padded[j]);
           }
         }
 
@@ -660,7 +406,7 @@ merklize(sycl::queue& q,
 
         [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
         {
-          digest[j] = opipe4::read();
+          digest[j] = opipe2::read();
         }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
@@ -673,36 +419,12 @@ merklize(sycl::queue& q,
         if (itr_cnt > 1) {
           [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
           {
-            digest[j] = opipe5::read();
+            digest[j] = opipe3::read();
           }
 
 #pragma unroll 8 // 256 -bit burst coalesced global memory write
           for (size_t j = 0; j < 8; j++) {
             intermediates_ptr[o_offset_1 + j] = digest[j];
-          }
-        }
-
-        if (itr_cnt > 2) {
-          [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-          {
-            digest[j] = opipe6::read();
-          }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-          for (size_t j = 0; j < 8; j++) {
-            intermediates_ptr[o_offset_2 + j] = digest[j];
-          }
-        }
-
-        if (itr_cnt > 3) {
-          [[intel::ivdep]] for (size_t j = 0; j < 8; j++)
-          {
-            digest[j] = opipe7::read();
-          }
-
-#pragma unroll 8 // 256 -bit burst coalesced global memory write
-          for (size_t j = 0; j < 8; j++) {
-            intermediates_ptr[o_offset_3 + j] = digest[j];
           }
         }
       }
@@ -719,18 +441,10 @@ merklize(sycl::queue& q,
       // on-chip (kernel) private memory allocation with attributes
       // such that enough read/ write ports are available for facilitating
       // parallel (stall-free, preferrably) access
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(4),
-        intel::numbanks(16)]] uint32_t msg[16];
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(4),
-        intel::numbanks(32)]] uint32_t padded[32];
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(4),
-        intel::numbanks(8)]] uint32_t hash_state[8];
-      [[intel::fpga_memory("BLOCK_RAM"),
-        intel::bankwidth(4),
-        intel::numbanks(16)]] uint32_t msg_schld[64];
+      [[intel::fpga_register]] uint32_t msg[16];
+      [[intel::fpga_register]] uint32_t padded[32];
+      [[intel::fpga_register]] uint32_t hash_state[8];
+      [[intel::fpga_register]] uint32_t msg_schld[64];
 
 #pragma unroll 16 // 512 -bit burst coalesced global memory read
       for (size_t j = 0; j < 16; j++) {
@@ -751,10 +465,6 @@ merklize(sycl::queue& q,
   sycl::event evt4 = ComputeSHA256(1);
   sycl::event evt5 = ComputeSHA256(2);
   sycl::event evt6 = ComputeSHA256(3);
-  sycl::event evt7 = ComputeSHA256(4);
-  sycl::event evt8 = ComputeSHA256(5);
-  sycl::event evt9 = ComputeSHA256(6);
-  sycl::event evt10 = ComputeSHA256(7);
 
   evt2.wait();
 
